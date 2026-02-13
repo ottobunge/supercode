@@ -1,0 +1,53 @@
+[package]
+name = "supercode"
+version = "0.1.0"
+edition = "2021"
+description = "Orchestration system for managing multiple coding agent sessions"
+license = "MIT"
+
+[dependencies]
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# SQLite
+rusqlite = { version = "0.31", features = ["bundled"] }
+
+# HTTP client
+reqwest = { version = "0.12", features = ["json"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# UUID
+uuid = { version = "1", features = ["v4", "serde"] }
+
+# Time
+chrono = { version = "0.4", features = ["serde"] }
+
+# Async traits
+async-trait = "0.1"
+
+# Directory paths
+dirs = "5"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# Error handling
+thiserror = "1"
+anyhow = "1"
+
+# For async SQL operations with rusqlite
+r2d2 = "0.8"
+r2d2_sqlite = "0.24"
+
+# CLI path resolution
+which = "6"
+
+[dev-dependencies]
+tempfile = "3"

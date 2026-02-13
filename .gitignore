@@ -1,0 +1,11 @@
+/target
+
+# Supercode
+supercode.db
+*.db
+opencode.json
+.supercode/
+
+# IDE
+.idea/
+.vscode/

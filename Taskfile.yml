@@ -1,0 +1,64 @@
+version: '3'
+
+tasks:
+  build:
+    desc: Build the supercode binary
+    cmds:
+      - cargo build --release
+
+  build-debug:
+    desc: Build the supercode binary in debug mode
+    cmds:
+      - cargo build
+
+  run:
+    desc: Run the supercode MCP server
+    cmds:
+      - cargo run -- serve --port {{.PORT | default "9091"}}
+    env:
+      PORT: '9091'
+
+  test:
+    desc: Run tests
+    cmds:
+      - cargo test
+
+  clean:
+    desc: Clean build artifacts
+    cmds:
+      - cargo clean
+
+  setup:
+    desc: Generate opencode.json configuration
+    cmds:
+      - ./scripts/generate-opencode-config.sh
+
+  mcp-list:
+    desc: List MCP servers in OpenCode
+    cmds:
+      - opencode mcp list
+
+  mcp-debug:
+    desc: Debug supercode MCP connection
+    cmds:
+      - opencode mcp debug supercode
+
+  db-clean:
+    desc: Remove the database file
+    cmds:
+      - rm -f ~/.supercode/supercode.db
+
+  db-sessions:
+    desc: List all sessions in the database
+    cmds:
+      - cargo run -- sessions
+
+  lint:
+    desc: Run clippy lints
+    cmds:
+      - cargo clippy -- -D warnings
+
+  check:
+    desc: Run cargo check
+    cmds:
+      - cargo check
