@@ -6,6 +6,7 @@ mod config;
 mod core;
 mod db;
 mod mcp;
+mod monitor;
 mod session;
 
 use anyhow::Result;

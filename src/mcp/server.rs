@@ -413,6 +413,34 @@ impl McpServer {
                     "properties": {}
                 }),
             },
+            // Sub-agent monitoring tools
+            Tool {
+                name: "get_subagent_status".to_string(),
+                description: "Get detailed status of a sub-agent session".to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "session_id": {
+                            "type": "string",
+                            "description": "The session ID to query"
+                        }
+                    },
+                    "required": ["session_id"]
+                }),
+            },
+            Tool {
+                name: "list_subagents".to_string(),
+                description: "List all sub-agents with their current status".to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "filter_blocked": {
+                            "type": "boolean",
+                            "description": "Only return sessions that are blocked/waiting"
+                        }
+                    }
+                }),
+            },
         ]
     }
 
@@ -839,6 +867,69 @@ impl McpServer {
                         text: json!({ 
                             "status": "not_configured",
                             "message": "Run 'supercode keygen' to configure this node"
+                        }).to_string()
+                    }]
+                })
+            }
+
+            // Sub-agent monitoring tools
+            "get_subagent_status" => {
+                let session_id = args["session_id"].as_str()
+                    .ok_or_else(|| anyhow::anyhow!("session_id is required"))?;
+
+                let activity = session_manager.get_session_activity(session_id).await
+                    .map_err(|e| anyhow::anyhow!("Failed to get session activity: {}", e))?;
+
+                // Check if blocked
+                let blocked = activity.is_blocked();
+
+                Ok(ToolCallResult {
+                    content: vec![ContentBlock::Text {
+                        text: json!({
+                            "session_id": activity.session_id,
+                            "provider_session_id": activity.provider_session_id,
+                            "state": format!("{:?}", activity.state),
+                            "is_blocked": blocked,
+                            "last_message": activity.last_message,
+                            "last_response": activity.last_response,
+                            "state_changed_at": activity.state_changed_at,
+                            "metadata": activity.metadata
+                        }).to_string()
+                    }]
+                })
+            }
+
+            "list_subagents" => {
+                let filter_blocked = args.get("filter_blocked")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+
+                let activities = session_manager.list_sessions_with_activity().await
+                    .map_err(|e| anyhow::anyhow!("Failed to list sessions: {}", e))?;
+
+                let filtered: Vec<_> = if filter_blocked {
+                    activities.into_iter().filter(|a| a.is_blocked()).collect()
+                } else {
+                    activities
+                };
+
+                let sessions: Vec<_> = filtered.iter().map(|a| {
+                    json!({
+                        "session_id": a.session_id,
+                        "provider_session_id": a.provider_session_id,
+                        "state": format!("{:?}", a.state),
+                        "is_blocked": a.is_blocked(),
+                        "last_message": a.last_message,
+                        "state_changed_at": a.state_changed_at
+                    })
+                }).collect();
+
+                Ok(ToolCallResult {
+                    content: vec![ContentBlock::Text {
+                        text: json!({
+                            "sessions": sessions,
+                            "total": sessions.len(),
+                            "blocked_count": filtered.iter().filter(|a| a.is_blocked()).count()
                         }).to_string()
                     }]
                 })

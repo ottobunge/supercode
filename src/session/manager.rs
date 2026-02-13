@@ -4,8 +4,10 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use async_trait::async_trait;
+use tokio::sync::RwLock;
 
 use crate::db::{repositories::session::{SessionRepository, SessionStatus as DbSessionStatus}, Database};
+use crate::monitor::{SessionActivity, SessionMonitor, OpenCodeMonitor, ClaudeMonitor};
 use super::{SessionProvider, SessionHandle, OpenCodeProvider, ClaudeProvider, SessionStatus as ProviderSessionStatus};
 
 pub struct SessionManager {
@@ -13,6 +15,11 @@ pub struct SessionManager {
     session_repo: SessionRepository,
     opencode_provider: Arc<OpenCodeProvider>,
     claude_provider: Arc<ClaudeProvider>,
+    /// Monitors for each provider type
+    opencode_monitor: Arc<OpenCodeMonitor>,
+    claude_monitor: Arc<ClaudeMonitor>,
+    /// Cache of session activities
+    activity_cache: Arc<RwLock<std::collections::HashMap<String, SessionActivity>>>,
 }
 
 impl SessionManager {
@@ -20,26 +27,50 @@ impl SessionManager {
         let opencode_provider = Arc::new(OpenCodeProvider::with_url("http://localhost:9090"));
         let claude_provider = Arc::new(ClaudeProvider::with_defaults());
         
-        Self {
-            db: db.clone(),
-            session_repo: SessionRepository::new(db),
-            opencode_provider,
-            claude_provider,
-        }
-    }
-
-    pub fn with_opencode_url(db: Database, url: impl Into<String>) -> Self {
-        let opencode_provider = Arc::new(OpenCodeProvider::with_url(url));
-        let claude_provider = Arc::new(ClaudeProvider::with_defaults());
+        // Create monitors
+        let opencode_monitor = Arc::new(OpenCodeMonitor::new("http://localhost:9090"));
+        let claude_monitor = Arc::new(ClaudeMonitor::new(
+            dirs::data_dir()
+                .unwrap_or_else(|| std::path::PathBuf::from("."))
+                .join("claude")
+                .join("sessions")
+        ));
         
         Self {
             db: db.clone(),
             session_repo: SessionRepository::new(db),
             opencode_provider,
             claude_provider,
+            opencode_monitor,
+            claude_monitor,
+            activity_cache: Arc::new(RwLock::new(std::collections::HashMap::new())),
         }
     }
 
+    pub fn with_opencode_url(db: Database, url: impl Into<String>) -> Self {
+        let opencode_url = url.into();
+        let opencode_provider = Arc::new(OpenCodeProvider::with_url(&opencode_url));
+        let claude_provider = Arc::new(ClaudeProvider::with_defaults());
+        let opencode_monitor = Arc::new(OpenCodeMonitor::new(&opencode_url));
+        let claude_monitor = Arc::new(ClaudeMonitor::new(
+            dirs::data_dir()
+                .unwrap_or_else(|| std::path::PathBuf::from("."))
+                .join("claude")
+                .join("sessions")
+        ));
+        
+        Self {
+            db: db.clone(),
+            session_repo: SessionRepository::new(db),
+            opencode_provider,
+            claude_provider,
+            opencode_monitor,
+            claude_monitor,
+            activity_cache: Arc::new(RwLock::new(std::collections::HashMap::new())),
+        }
+    }
+
+    /// Get the database repository
     pub fn repository(&self) -> &SessionRepository {
         &self.session_repo
     }
@@ -51,6 +82,101 @@ impl SessionManager {
             "claude" => Ok(self.claude_provider.as_ref() as &dyn SessionProvider),
             _ => anyhow::bail!("Unknown session type: {}", session_type),
         }
+    }
+
+    /// Get the monitor for a specific provider type
+    fn get_monitor(&self, session_type: &str) -> Result<Box<&dyn SessionMonitor>> {
+        match session_type {
+            "opencode" => Ok(Box::new(self.opencode_monitor.as_ref())),
+            "claude" => Ok(Box::new(self.claude_monitor.as_ref())),
+            _ => anyhow::bail!("Unknown session type: {}", session_type),
+        }
+    }
+
+    // ==================== Session Monitoring ====================
+
+    /// Get detailed activity for a session
+    pub async fn get_session_activity(&self, session_id: &str) -> Result<SessionActivity> {
+        // First get the session from DB to know its type
+        let session = self.session_repo.get(session_id).await?
+            .ok_or_else(|| anyhow::anyhow!("Session not found: {}", session_id))?;
+
+        let session_type = session.session_type.as_str();
+        let provider_session_id = session.opencode_session_id
+            .ok_or_else(|| anyhow::anyhow!("Session has no provider ID"))?;
+
+        let monitor = self.get_monitor(session_type)?;
+        
+        // Try to get activity from provider
+        match monitor.get_activity(&provider_session_id).await {
+            Ok(mut activity) => {
+                activity.session_id = session_id.to_string();
+                
+                // Cache it
+                let mut cache = self.activity_cache.write().await;
+                cache.insert(session_id.to_string(), activity.clone());
+                
+                Ok(activity)
+            }
+            Err(e) => {
+                // If provider query fails, return cached or create basic activity
+                let cache = self.activity_cache.read().await;
+                if let Some(cached) = cache.get(session_id) {
+                    Ok(cached.clone())
+                } else {
+                    // Return basic activity from DB state
+                    let state = match session.status.as_str() {
+                        "running" | "active" => crate::monitor::AgentState::Processing,
+                        "completed" => crate::monitor::AgentState::Completed,
+                        "failed" => crate::monitor::AgentState::Failed { error: e.to_string() },
+                        _ => crate::monitor::AgentState::Unknown,
+                    };
+                    
+                    Ok(SessionActivity::new(
+                        session_id.to_string(),
+                        provider_session_id,
+                    ).with_state(state))
+                }
+            }
+        }
+    }
+
+    /// Check if a session is waiting for human approval
+    pub async fn is_session_waiting(&self, session_id: &str) -> Result<bool> {
+        let activity = self.get_session_activity(session_id).await?;
+        Ok(activity.is_blocked())
+    }
+
+    /// List all sessions with their current activity
+    pub async fn list_sessions_with_activity(&self) -> Result<Vec<SessionActivity>> {
+        let sessions = self.session_repo.list(None, None).await?;
+        
+        let mut activities = Vec::new();
+        
+        for session in sessions {
+            match self.get_session_activity(&session.id).await {
+                Ok(activity) => activities.push(activity),
+                Err(_) => {
+                    // If we can't get activity, add basic one
+                    activities.push(SessionActivity::new(
+                        session.id.clone(),
+                        session.opencode_session_id.unwrap_or_default(),
+                    ).with_state(match session.status.as_str() {
+                        "running" | "active" => crate::monitor::AgentState::Processing,
+                        "completed" => crate::monitor::AgentState::Completed,
+                        _ => crate::monitor::AgentState::Unknown,
+                    }));
+                }
+            }
+        }
+        
+        Ok(activities)
+    }
+
+    /// Get all sessions that are waiting for human input/approval
+    pub async fn get_blocked_sessions(&self) -> Result<Vec<SessionActivity>> {
+        let activities = self.list_sessions_with_activity().await?;
+        Ok(activities.into_iter().filter(|a| a.is_blocked()).collect())
     }
 
     /// Spawn a new session using the appropriate provider
