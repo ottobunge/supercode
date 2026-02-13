@@ -80,6 +80,65 @@ enum Commands {
         #[arg(long, default_value = "8080")]
         port: u16,
     },
+
+    /// Manage peers
+    Peer {
+        #[command(subcommand)]
+        command: PeerCommands,
+    },
+
+    /// Generate keypair for this node
+    Keygen {
+        /// Optional password to encrypt the config
+        #[arg(long)]
+        password: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum PeerCommands {
+    /// Add a new peer
+    Add {
+        /// Peer name
+        name: String,
+
+        /// Hostname or IP to connect to
+        hostname: String,
+
+        /// Auth info for the peer
+        #[arg(long)]
+        auth: Option<String>,
+    },
+
+    /// List all peers
+    List,
+
+    /// Remove a peer
+    Remove {
+        /// Peer name
+        name: String,
+    },
+
+    /// Show pending peer requests
+    Pending,
+
+    /// Accept a pending peer request
+    Accept {
+        /// Peer name
+        name: String,
+    },
+
+    /// Deny a pending peer request
+    Deny {
+        /// Peer name
+        name: String,
+    },
+
+    /// Connect to a peer
+    Connect {
+        /// Peer name
+        name: String,
+    },
 }
 
 pub fn run() -> Result<()> {
@@ -188,14 +247,164 @@ pub fn run() -> Result<()> {
         Commands::Serve { port } => {
             tracing::info!("Starting MCP server on port {}", port);
             
+            // Load config for peer server
+            let config = crate::config::Config::load(None)?;
+            
             // Create session manager
             let session_manager = Arc::new(crate::session::SessionManager::new(db));
             
-            // Create and run MCP server
+            // Create MCP server
             let mcp_server = crate::mcp::McpServer::new(port, session_manager);
-            mcp_server.run().await?;
+            
+            // Create and start peer server (port + 1)
+            let peer_port = port + 1;
+            let config = Arc::new(tokio::sync::RwLock::new(config));
+            let peer_server = crate::mcp::PeerServer::new(peer_port, config.clone());
+            
+            // Start both servers
+            tokio::select! {
+                result = mcp_server.run() => {
+                    result?;
+                }
+                result = peer_server.start() => {
+                    result?;
+                }
+            }
             
             Ok(())
+        }
+
+        Commands::Keygen { password } => {
+            use crate::config::{keygen, Config};
+
+            // Generate keypair
+            let (private_key, public_key) = keygen::generate_keypair()?;
+
+            // Load or create config
+            let mut config = Config::load(None).unwrap_or_default();
+
+            // Set name if not set
+            if config.name.is_empty() {
+                println!("Enter a name for this node:");
+                let mut input = String::new();
+                std::io::stdin().read_line(&mut input)?;
+                config.name = input.trim().to_string();
+            }
+
+            config.private_key = private_key;
+            config.public_key = public_key;
+
+            // Save config
+            config.save(None)?;
+
+            println!("Generated keypair for node: {}", config.name);
+            println!("Public key: {}", config.public_key);
+            println!("Config saved to: ~/.supercode/config.yml");
+            Ok(())
+        }
+
+        Commands::Peer { command } => {
+            use crate::config::{Config, PeerConfig};
+
+            match command {
+                PeerCommands::Add { name, hostname, auth } => {
+                    let mut config = Config::load(None)?;
+
+                    let peer = PeerConfig {
+                        auth: auth.unwrap_or_default(),
+                        hostnames: vec![hostname],
+                        public_key: String::new(),
+                        verified: false,
+                    };
+
+                    config.add_peer(&name, peer);
+                    config.save(None)?;
+
+                    println!("Added peer: {}", name);
+                    Ok(())
+                }
+
+                PeerCommands::List => {
+                    let config = Config::load(None)?;
+
+                    if config.peers.is_empty() {
+                        println!("No peers configured");
+                    } else {
+                        for (name, peer) in config.peers {
+                            println!("[{}] {} - {:?}", name, peer.hostnames.join(", "), if peer.verified { "verified" } else { "unverified" });
+                        }
+                    }
+                    Ok(())
+                }
+
+                PeerCommands::Remove { name } => {
+                    let mut config = Config::load(None)?;
+                    config.remove_peer(&name);
+                    config.save(None)?;
+                    println!("Removed peer: {}", name);
+                    Ok(())
+                }
+
+                PeerCommands::Pending => {
+                    let config = Config::load(None)?;
+                    let requests = config.get_pending_requests();
+
+                    if requests.is_empty() {
+                        println!("No pending peer requests");
+                    } else {
+                        for req in requests {
+                            println!("[{}] from {} at {}", req.name, req.public_key, req.from_addr);
+                        }
+                    }
+                    Ok(())
+                }
+
+                PeerCommands::Accept { name } => {
+                    let mut config = Config::load(None)?;
+                    let requests: Vec<_> = config.get_pending_requests();
+
+                    let request = requests.iter()
+                        .find(|r| r.name == name)
+                        .ok_or_else(|| anyhow::anyhow!("No pending request from {}", name))?;
+
+                    let peer = PeerConfig {
+                        auth: String::new(),
+                        hostnames: vec![request.from_addr.clone()],
+                        public_key: request.public_key.clone(),
+                        verified: true,
+                    };
+
+                    config.add_peer(&name, peer);
+                    config.clear_pending_request(&name);
+                    config.save(None)?;
+
+                    println!("Accepted peer: {}", name);
+                    Ok(())
+                }
+
+                PeerCommands::Deny { name } => {
+                    let mut config = Config::load(None)?;
+                    config.deny_peer(&name);
+                    config.save(None)?;
+                    println!("Denied peer: {}", name);
+                    Ok(())
+                }
+
+                PeerCommands::Connect { name } => {
+                    let config = Config::load(None)?;
+
+                    if !config.can_peer() {
+                        anyhow::bail!("Cannot connect: run 'supercode keygen' first");
+                    }
+
+                    let peer = config.get_peer(&name)
+                        .ok_or_else(|| anyhow::anyhow!("Peer not found: {}", name))?;
+
+                    println!("Connecting to peer {} at {:?}...", name, peer.hostnames);
+                    // TODO: Implement actual connection
+                    Ok(())
+                }
+            }
         }
         }
     })

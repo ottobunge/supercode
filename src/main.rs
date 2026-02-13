@@ -2,6 +2,7 @@
 
 mod agent;
 mod cli;
+mod config;
 mod core;
 mod db;
 mod mcp;

@@ -1,0 +1,27 @@
+# Supercode Config File
+# Location: $HOME/.supercode/config.yml
+# Can be overridden with SUPERCODE_CONFIG env variable
+
+# Required: This node's identity
+name: "my-supercode-node"
+
+# Private key (base64 encoded) - REQUIRED for peering
+# Generate with: supercode keygen
+private_key: ""
+
+# Public key (base64 encoded) - derived from private_key
+public_key: ""
+
+# Database path (optional, defaults to ~/.supercode/supercode.db)
+database_path: "~/.supercode/supercode.db"
+
+# MCP Server settings
+server:
+  host: "0.0.0.0"
+  port: 9091
+
+# Known peers
+peers: {}
+
+# Pending peer requests (filled automatically by server)
+pending_peer_requests: {}

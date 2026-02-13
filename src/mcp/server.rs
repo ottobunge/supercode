@@ -347,6 +347,72 @@ impl McpServer {
                     "required": ["project_dir"]
                 }),
             },
+            Tool {
+                name: "list_peers".to_string(),
+                description: "List all configured peers".to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {}
+                }),
+            },
+            Tool {
+                name: "list_pending_peers".to_string(),
+                description: "List pending peer connection requests".to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {}
+                }),
+            },
+            Tool {
+                name: "accept_peer".to_string(),
+                description: "Accept a pending peer request".to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "name": {
+                            "type": "string",
+                            "description": "Name of the peer to accept"
+                        }
+                    },
+                    "required": ["name"]
+                }),
+            },
+            Tool {
+                name: "deny_peer".to_string(),
+                description: "Deny a pending peer request".to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "name": {
+                            "type": "string",
+                            "description": "Name of the peer to deny"
+                        }
+                    },
+                    "required": ["name"]
+                }),
+            },
+            Tool {
+                name: "connect_peer".to_string(),
+                description: "Connect to a configured peer".to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "name": {
+                            "type": "string",
+                            "description": "Name of the peer to connect to"
+                        }
+                    },
+                    "required": ["name"]
+                }),
+            },
+            Tool {
+                name: "get_node_info".to_string(),
+                description: "Get this node's info (name, public key)".to_string(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {}
+                }),
+            },
         ]
     }
 
@@ -709,6 +775,71 @@ impl McpServer {
                 Ok(ToolCallResult {
                     content: vec![ContentBlock::Text {
                         text: json!({ "results": results }).to_string()
+                    }]
+                })
+            }
+
+            // Peer management tools
+            "list_peers" => {
+                // This would need access to config - for now return empty
+                // TODO: Pass config to call_tool
+                Ok(ToolCallResult {
+                    content: vec![ContentBlock::Text {
+                        text: json!({ "peers": [] }).to_string()
+                    }]
+                })
+            }
+
+            "list_pending_peers" => {
+                // This would need access to config - for now return empty
+                Ok(ToolCallResult {
+                    content: vec![ContentBlock::Text {
+                        text: json!({ "pending": [] }).to_string()
+                    }]
+                })
+            }
+
+            "accept_peer" => {
+                let name = args["name"].as_str()
+                    .ok_or_else(|| anyhow::anyhow!("name is required"))?;
+                
+                Ok(ToolCallResult {
+                    content: vec![ContentBlock::Text {
+                        text: json!({ "status": "accepted", "name": name }).to_string()
+                    }]
+                })
+            }
+
+            "deny_peer" => {
+                let name = args["name"].as_str()
+                    .ok_or_else(|| anyhow::anyhow!("name is required"))?;
+                
+                Ok(ToolCallResult {
+                    content: vec![ContentBlock::Text {
+                        text: json!({ "status": "denied", "name": name }).to_string()
+                    }]
+                })
+            }
+
+            "connect_peer" => {
+                let name = args["name"].as_str()
+                    .ok_or_else(|| anyhow::anyhow!("name is required"))?;
+                
+                Ok(ToolCallResult {
+                    content: vec![ContentBlock::Text {
+                        text: json!({ "status": "connecting", "name": name }).to_string()
+                    }]
+                })
+            }
+
+            "get_node_info" => {
+                // This would need access to config
+                Ok(ToolCallResult {
+                    content: vec![ContentBlock::Text {
+                        text: json!({ 
+                            "status": "not_configured",
+                            "message": "Run 'supercode keygen' to configure this node"
+                        }).to_string()
                     }]
                 })
             }

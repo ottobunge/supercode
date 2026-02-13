@@ -49,5 +49,22 @@ r2d2_sqlite = "0.24"
 # CLI path resolution
 which = "6"
 
+# YAML config
+serde_yaml = "0.9"
+
+# Encryption - x25519 for key exchange
+x25519-dalek = { version = "2", features = ["static_secrets"] }
+ed25519-dalek = "2"
+rand = "0.8"
+
+# AES-GCM for config encryption
+aes-gcm = "0.10"
+argon2 = "0.5"
+base64 = "0.22"
+typenum = "1.17"
+
+# For peer networking
+futures = "0.3"
+
 [dev-dependencies]
 tempfile = "3"
